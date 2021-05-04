@@ -118,4 +118,173 @@ class ChatDataModule(pl.LightningDataModule):
 
     @staticmethod
     def add_model_specific_args(parent_parser):
-        pass
+        # parent_parser ArgumentParser에 '--numworkers'인자를 추가한다.
+        parser = argparse.ArgumentParser(parents = [parent_parser], add_help = False)
+        parser.add_argument('--num_workers',
+                            type = int,
+                            default = 5,
+                            help = 'num of worker for dataloader')
+        return parser
+
+    def setup(self, stage):
+        # train과 test data를 ChatDataset class에 넣는다.
+        self.train = ChatDataset(self.train_file_path, self.tok_vocab, self.max_seq_len)
+        self.test = ChatDataset(self.test_file_path, self.tok_vocab, self.max_seq_len)
+
+    def train_dataloader(self):
+        # ChatDataset에 넣은 self.train을 DataLoader로 만든다.
+        train = DataLoader(self.train, batch_size = self.batch_size, num_workers = self.num_workers, shuffle = False)
+
+        return train
+
+    def val_dataloader(self):
+        # ChatDataset에 넣은 self.test를 DataLoader로 만든다.
+        val = DataLoader(self.val, batch_size = self.batch_size, num_workers = self.num_workers, shuffle = False)
+
+        return val
+
+    def test_dataloader(self):
+        # ChatDataset에 넣은 self.test를 DataLoader로 만든다.
+        test = DataLoader(self.test, batch_size = self.batch_size, num_workers = self.num_workers, shuffle = False)
+
+        return test
+
+class Base(pl.LightningModule):
+    def __init__(self, hparams, **kwargs) -> None:
+        super(Base, self).__init__()
+        self.hparams = hparams
+
+    @staticmethod
+    def add_model_specific_args(parent_parser):
+        # parent_parser에 추가적인 인자들을 추가한다.
+        parser = argparse.ArgumentParser(parents=[parent_parser], add_help=False)
+        
+        parser.add_argument('--batch-size', type = int, default = 14, help = 'batch size for training (default: 96)')
+
+        parser.add_argument('--lr', type = float, default = 5e-5, help = 'The initial learning rate')
+
+        parser.add_argument('--warmup_ratio', type = float, default = 0.1, help = 'warmup ratio')
+
+        parser.add_argument('--model_path', type = str, default = None, help = 'kobart model path')
+
+        return parser
+
+    def configure_optimizers(self):
+        # model의 parameter들을 모두 받아온다.
+        param_optimizer = list(self.model.named_parameters())
+        # 가중치가 감소되지 않을 parameter
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        # parameter 중 no_decay에 들어있는 건 'weight_decay'가 0.0, no_decay에 없는 건 0.1
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_dacay)], 'weight_decay': 0.0}
+        ]
+        # AdamW를 사용해 optimizer들을 최적화 한다.
+        optimizer = AdamW(optimizer_grouped_parameters, lr = self.hparams.lr, correct_bias = False)
+
+        # self.hparams.gpus와 self.hparams.num_nodes를 곱해 num_workers를 만든다
+        num_workers = (self.hparams.gpus if self.hparams.gpus is not None else 1) * (self.hparams.num_nodes if self.hparams.num_node is not None else 1)
+        data_len = len(self.train_dataloader().dataset)
+        logging.info(f'number of workers {num_workers}, data length {data_len}')
+        # data_len을 self.hparams.batch_size * num_worker로 나눈 값에 self.hparams.max_epochs를 곱해 총 train_step을 구한다.  
+        num_train_steps = int(data_len / (self.hparams.batch_size * num_workers) * self.hparams.max_epochs)
+        logging.info(f'num_train_steps : {num_train_steps}')
+        # self.hparams.warmup_ratio를 num_train_steps에 곱해 num_warmup_steps를 구한다.
+        num_warmup_steps = int(num_train_steps * self.hparams.warmup_ratio)
+        logging.info(f'num_warmup_steps : {num_warmup_steps}')
+        # scheduler를 get_cosine_schedule_with_warmup 함수를 사용해 선언
+        scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps = num_warmup_steps, num_training_steps = num_train_steps)
+        # lr_scheduler 선언
+        lr_scheduler = {'scheduler' : scheduler, 'monitor' : 'loss', 'interval' : 'step', 'frequency' : 1}
+
+        return [optimizer], [lr_scheduler]
+
+class KoBARTConditionalGeneration(Base):
+    def __init__(self, hparmas, **kwargs):
+        super(KoBARTConditionalGeneration, self).__init__(hparams, **kwargs)
+        # 저장된 model의 경로를 받아 BartForConditionalGeneration model을 선언한다.
+        self.model = BartForConditionalGeneration.from_pretrained(self.hparams.model_path)
+        self.model.train()
+        # token 설정
+        self.bos_token = '<s>'
+        self.eos_token = '</s>'
+        # tokenizer를 PreTrainedTokenizerFast 함수를 통해 선언한다.
+        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file = os.path.join(self.hparams.tokenizer_path, 'model.json'),
+            bos_token = self.bos_token, eos_token = self.eos_token, unk_token = '<unk>', pad_token = '<pad>', mask_token = '<mask>')
+
+    def forward(self, inputs):
+        return self.model(input_ids = inputs['input_ids'],
+                            attention_mask = inputs['attention_mask'],
+                            decoder_input_ids = inputs['decoder_input_ids'],
+                            decoder_attention_mask = inputs['decoder_attention_mask'],
+                            labels = inputs['labels'], return_dict = True)
+    
+    def training_step(self, batch, batch_idx):
+        outs = self(batch)
+        loss = outs.loss
+        self.log('train_loss', loss, prog_bar = True, on_step = True, on_epoch = True)
+        return loss
+
+    def validataion_step(self, batch, bath_idx):
+        outs = self(batch)
+        loss = outs['loss']
+        self.log('val_loss', loss, on_step = True, on_epoch = True, prog_bar = True)
+
+    def chat(self, text):
+        # text 문장의 token을 id로 바꾸고 bos_token, eos_token을 붙여 input_ids를 만든다.
+        input_ids = [self.tokenizer.bos_token_id] + self.tokenizer.encode(text) + [self.tokenizer.eos_token_id]
+        # 문장 ids를 생성
+        res_ids = self.model.generate(torch.tensor([input_ids]),
+                                        max_length = self.hparams.max_seq_len,
+                                        num_beanms = 5,
+                                        eos_token_id = self.tokenizer.eos_token_id,
+                                        bad_words_ids = [[self.tokenizer.unk_token_id]])
+        # ids를 문장으로 변환
+        a = self.tokenizer.batch_decode(res_ids.tolist())[0]
+        # token들을 공백으로 치환하고 return
+        return a.replace('<s>', '').replace('</s>', '')
+        
+if __name__ == '__main__':
+    parser = Base.add_model_specific_args(parser)
+    parser = ArgsBase.add_level_specific_args(parser)
+    parser = ChatDataModule.add_model_specific_args(parser)
+    parser = pl.Trainer.add_argparse_args(parser)
+    # parser의 값을 args 변수로 받아온다.
+    args = parser.parse_args()
+    logging.info(args)
+    # KoBARTConditionalGeneration에 args parameter들을 넣어 model을 선언
+    model = KoBARTConditionalGeneration(args)
+
+    dm = ChatDataModule(args.train_file,
+                        args.test_file,
+                        os.path.join(args.tokenizer_path, 'model.json'),
+                        max_seq_len = args.max_seq_len,
+                        num_workers = args.num_workers)
+    checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor = 'val_loss',
+                                                        dirpath = args.default_root_dir,
+                                                        filename = 'model_chp/{epoch:02d}-{val_loss:.3f}',
+                                                        verbose = True,
+                                                        save_last = True,
+                                                        mode = 'min',
+                                                        save_top_k = -1,
+                                                        prefix = 'kobart_chitchat')
+    tb_logger = pl_loggers.TensorBoardLogger(os.path.join(args.default_root_dir, 'tb_logs'))
+    lr_logger = pl.callbacks.LearningRateMonitor()
+    trainer = pl.Trainer.from_argparse_args(args, logger = tb_logger, callbacks = [checkpoint_callback, lr_logger])
+
+    # model과 data를 넣어 학습
+    trainer.fit(model, dm)
+    if args.chat:
+        # evaluation mode로 전환
+        model.model.eval()
+        while 1:
+            # 문장 입력
+            q = input('user > ').strip()
+            # 입력 받은 문장이 'quit'일 시 break
+            if q == 'quit':
+                break
+            # 생성된 문장 출력
+            print("Simsimi > {}".format(model.chat(q)))
+
+
+       
