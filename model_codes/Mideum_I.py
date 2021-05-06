@@ -25,7 +25,7 @@ class ArgsBase():
             parents = [parent_parser], add_help = False)
         parser.add_argument('--train_file',
                             type = str,
-                            default = 'datasets/ChatbotData.csv',
+                            default = '',
                             help = 'train file')
 
         parser.add_argument('--test_file',
@@ -285,6 +285,3 @@ if __name__ == '__main__':
                 break
             # 생성된 문장 출력
             print("Simsimi > {}".format(model.chat(q)))
-
-
-       
