@@ -35,13 +35,13 @@ class ArgsBase():
 
         parser.add_argument('--tokenizer_path',
                             type = str,
-                            default = 'tokenizer',
+                            default = '',
                             help = 'tokenizer')
 
         parser.add_argument('--batch_size',
                             type = int,
                             default = 14,
-                            help = '')
+                            help = 'batch size')
 
         parser.add_argument('--max_seq_len',
                             type = int,
