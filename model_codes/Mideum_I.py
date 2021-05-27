@@ -51,14 +51,14 @@ class ArgsBase():
         return parser
 
 class ChatDataset(Dataset):
-    def __init__(self, filepath, tok_vocab, max_seq_len = 128) -> None:
+    def __init__(self, filepath, tokenizer_path, max_seq_len = 128) -> None:
         self.filepath = filepath
         self.data = pd.read_csv(self.filepath)
         self.bos_token = '<s>'
         self.eos_token = '</s>'
         self.max_seq_len = max_seq_len
         self.tokenizer = PreTrainedTokenizerFast(
-            tokenizer_file = tok_vocab,
+            tokenizer_file = os.path.join(tokenizer_path, 'model.json'),
             bos_token = self.bos_token,
             eos_token = self.eos_token,
             unk_token = '<unk>',
@@ -107,13 +107,13 @@ class ChatDataset(Dataset):
                 'labels' : np.array(labels, dtype = np.int_)}
 
 class ChatDataModule(pl.LightningDataModule):
-    def __init__(self, train_file, test_file, tok_vocab, max_seq_len = 128, batch_size = 32, num_workers = 5):
+    def __init__(self, train_file, test_file, tokenizer_path, max_seq_len = 128, batch_size = 32, num_workers = 5):
         super().__init__()
         self.batch_size = batch_size
         self.max_seq_len = max_seq_len
         self.train_file_path = train_file
         self.test_file_path = test_file
-        self.tok_vocab = tok_vocabs
+        self.tokenizer_path = tokenizer_path
         self.num_workers = num_workers
 
     @staticmethod
@@ -128,8 +128,8 @@ class ChatDataModule(pl.LightningDataModule):
 
     def setup(self, stage):
         # train과 test data를 ChatDataset class에 넣는다.
-        self.train = ChatDataset(self.train_file_path, self.tok_vocab, self.max_seq_len)
-        self.test = ChatDataset(self.test_file_path, self.tok_vocab, self.max_seq_len)
+        self.train = ChatDataset(self.train_file_path, self.tokenizer_path, self.max_seq_len)
+        self.test = ChatDataset(self.test_file_path, self.tokenizer_path, self.max_seq_len)
 
     def train_dataloader(self):
         # ChatDataset에 넣은 self.train을 DataLoader로 만든다.
@@ -177,7 +177,7 @@ class Base(pl.LightningModule):
         # parameter 중 no_decay에 들어있는 건 'weight_decay'가 0.0, no_decay에 없는 건 0.1
         optimizer_grouped_parameters = [
             {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_dacay)], 'weight_decay': 0.0}
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
         # AdamW를 사용해 optimizer들을 최적화 한다.
         optimizer = AdamW(optimizer_grouped_parameters, lr = self.hparams.lr, correct_bias = False)
@@ -200,7 +200,7 @@ class Base(pl.LightningModule):
         return [optimizer], [lr_scheduler]
 
 class KoBARTConditionalGeneration(Base):
-    def __init__(self, hparmas, **kwargs):
+    def __init__(self, hparams, **kwargs):
         super(KoBARTConditionalGeneration, self).__init__(hparams, **kwargs)
         # 저장된 model의 경로를 받아 BartForConditionalGeneration model을 선언한다.
         self.model = BartForConditionalGeneration.from_pretrained(self.hparams.model_path)
