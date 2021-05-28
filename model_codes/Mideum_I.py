@@ -7,11 +7,12 @@ import pandas as pd
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning import loggers as pl_loggers
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import DataLoader, Dataset
-from transformers import (BartForConditionalGeneration, PreTrainedTokenizerFast)
+from transformers import (BartForConditionalGeneration, BartTokenizer)
 from transformers.optimization import AdamW, get_cosine_schedule_with_warmup
 
-parser = argparse.ArgumentParser(description = "PIGO's Mideom_I")
+parser = argparse.ArgumentParser(description = "Trest's Mideom_I")
 parser.add_argument('--checkpoint_path', type = str, help = 'checkpoint path')
 parser.add_argument('--chat', action = 'store_true', default = False, help = 'response generation on given user input')
 
@@ -51,20 +52,27 @@ class ArgsBase():
         return parser
 
 class ChatDataset(Dataset):
-    def __init__(self, filepath, tokenizer_path, max_seq_len = 128) -> None:
+    def __init__(self, filepath, vocab_path, merges_file, max_seq_len = 128) -> None: # vocab_path, merges_file 파라미터 추가해야 함
         self.filepath = filepath
         self.data = pd.read_csv(self.filepath)
         self.bos_token = '<s>'
         self.eos_token = '</s>'
         self.max_seq_len = max_seq_len
-        self.tokenizer = PreTrainedTokenizerFast(
-            tokenizer_file = os.path.join(tokenizer_path, 'model.json'),
+        # self.tokenizer = PreTrainedTokenizerFast(
+        #     tokenizer_file = os.path.join(tokenizer_path, 'model.json'),
+        #     bos_token = self.bos_token,
+        #     eos_token = self.eos_token,
+        #     unk_token = '<unk>',
+        #     pad_token = '<pad>',
+        #     mask_token = '<mask>'
+        # )
+        self.tokenizer = BartTokenizer(
+            vocab_file = vocab_path, 
+            merges_file = merges_file,
             bos_token = self.bos_token,
             eos_token = self.eos_token,
-            unk_token = '<unk>',
-            pad_token = '<pad>',
-            mask_token = '<mask>'
         )
+        
     # data file의 길이를 받아온다
     def __len__(self):
         return len(self.data)
@@ -97,8 +105,9 @@ class ChatDataset(Dataset):
         labels = self.tokenizer.convert_tokens_to_ids((a_tokens[1:(self.max_seq_len + 1)]))
         
         # cross entropy loss를 위한 masking
-        if len(labels) < self.max_seq_len:
-            labels += [-100]
+        if len(labels) < self.max_seq_len: 
+            while len(labels) < self.max_seq_len:
+                labels += [-100]
 
         return {'input_ids' : np.array(encoder_input_id, dtype = np.int_),
                 'attention_mask' : np.array(encoder_attention_mask, dtype = np.float_),
@@ -107,13 +116,15 @@ class ChatDataset(Dataset):
                 'labels' : np.array(labels, dtype = np.int_)}
 
 class ChatDataModule(pl.LightningDataModule):
-    def __init__(self, train_file, test_file, tokenizer_path, max_seq_len = 128, batch_size = 32, num_workers = 5):
+    def __init__(self, train_file, test_file, vocab_path, merges_file, max_seq_len = 128, batch_size = 32, num_workers = 5): # vocab_path, merges_file 파라미터를 추가함
         super().__init__()
         self.batch_size = batch_size
         self.max_seq_len = max_seq_len
         self.train_file_path = train_file
         self.test_file_path = test_file
-        self.tokenizer_path = tokenizer_path
+        # self.tokenizer_path = tokenizer_path
+        self.vocab_path = vocab_path 
+        self.merges_file = merges_file 
         self.num_workers = num_workers
 
     @staticmethod
@@ -128,8 +139,8 @@ class ChatDataModule(pl.LightningDataModule):
 
     def setup(self, stage):
         # train과 test data를 ChatDataset class에 넣는다.
-        self.train = ChatDataset(self.train_file_path, self.tokenizer_path, self.max_seq_len)
-        self.test = ChatDataset(self.test_file_path, self.tokenizer_path, self.max_seq_len)
+        self.train = ChatDataset(self.train_file_path, self.vocab_path, self.merges_file, self.max_seq_len)
+        self.test = ChatDataset(self.test_file_path, self.vocab_path, self.merges_file, self.max_seq_len)
 
     def train_dataloader(self):
         # ChatDataset에 넣은 self.train을 DataLoader로 만든다.
@@ -209,8 +220,14 @@ class KoBARTConditionalGeneration(Base):
         self.bos_token = '<s>'
         self.eos_token = '</s>'
         # tokenizer를 PreTrainedTokenizerFast 함수를 통해 선언한다.
-        self.tokenizer = PreTrainedTokenizerFast(tokenizer_file = os.path.join(self.hparams.tokenizer_path, 'model.json'),
-            bos_token = self.bos_token, eos_token = self.eos_token, unk_token = '<unk>', pad_token = '<pad>', mask_token = '<mask>')
+        # self.tokenizer = PreTrainedTokenizerFast(tokenizer_file = os.path.join(self.hparams.tokenizer_path, 'model.json'),
+        #     bos_token = self.bos_token, eos_token = self.eos_token, unk_token = '<unk>', pad_token = '<pad>', mask_token = '<mask>')
+
+        # tokenizer를 BartTokenizer 함수를 통해 선언한다.
+        self.tokenizer = BartTokenizer(vocab_file = self.hparams.vocab_path,
+                                        merges_file = self.hparams.merges_file, 
+                                        bos_token = self.bos_token,
+                                        eos_token = self.eos_token)
 
     def forward(self, inputs):
         return self.model(input_ids = inputs['input_ids'],
@@ -257,7 +274,8 @@ if __name__ == '__main__':
 
     dm = ChatDataModule(args.train_file,
                         args.test_file,
-                        os.path.join(args.tokenizer_path, 'model.json'),
+                        args.vocab_path,
+                        args.merges_file,
                         max_seq_len = args.max_seq_len,
                         num_workers = args.num_workers)
     checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor = 'val_loss',
@@ -266,11 +284,20 @@ if __name__ == '__main__':
                                                         verbose = True,
                                                         save_last = True,
                                                         mode = 'min',
-                                                        save_top_k = -1,
+                                                        save_top_k = 4,
                                                         prefix = 'kobart_chitchat')
+
+    early_stopping_callback = EarlyStopping(
+        monitor='val_loss',
+        min_delta=0.00,
+        patience=3,
+        verbose = False,
+        mode='min'
+    )
+
     tb_logger = pl_loggers.TensorBoardLogger(os.path.join(args.default_root_dir, 'tb_logs'))
     lr_logger = pl.callbacks.LearningRateMonitor()
-    trainer = pl.Trainer.from_argparse_args(args, logger = tb_logger, callbacks = [checkpoint_callback, lr_logger])
+    trainer = pl.Trainer.from_argparse_args(args, logger = tb_logger, callbacks = [checkpoint_callback, lr_logger, early_stopping_callback])
 
     # model과 data를 넣어 학습
     trainer.fit(model, dm)
