@@ -277,8 +277,9 @@ if __name__ == '__main__':
                         args.vocab_path,
                         args.merges_file,
                         max_seq_len = args.max_seq_len,
-                        batch_size=32,
+                        batch_size = 32,
                         num_workers = args.num_workers)
+                        
     checkpoint_callback = pl.callbacks.ModelCheckpoint(monitor = 'val_loss',
                                                         dirpath = args.default_root_dir,
                                                         filename = 'model_chp/{epoch:02d}-{val_loss:.3f}',
