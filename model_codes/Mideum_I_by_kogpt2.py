@@ -4,10 +4,12 @@ import logging
 
 import numpy as np
 import pandas as pd
+from pytorch_lightning.callbacks import early_stopping
 import torch
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.core.lightning import LightningModule
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from torch.utils.data import DataLoader, Dataset
 from transformers.optimization import AdamW, get_cosine_schedule_with_warmup
 from transformers import PreTrainedTokenizerFast, GPT2LMHeadModel
@@ -282,12 +284,19 @@ if __name__ == "__main__":
             mode='min',
             prefix='model_'
         )
+        early_stopping_callback = EarlyStopping(
+            monitor = 'val_loss',
+            verbose = True,
+            mode = 'min'
+        )
         # python train_torch.py --train --gpus 1 --max_epochs 3
         model = KoGPT2Chat(args)
         model.train()
         trainer = Trainer.from_argparse_args(
             args,
-            checkpoint_callback=checkpoint_callback, gradient_clip_val=1.0)
+            checkpoint_callback=[checkpoint_callback, early_stopping_callback], 
+            gradient_clip_val=1.0)
+            
         trainer.fit(model)
         logging.info('best model path {}'.format(checkpoint_callback.best_model_path))
     if args.chat:
