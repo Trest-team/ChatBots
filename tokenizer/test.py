@@ -1,16 +1,14 @@
-import tokenizers
-from transformers import (BartTokenizerFast, BartTokenizer)
+from transformers import BertTokenizerFast
 
-merges_file = '' # ...merges.txt file의 path
-vocab_path = '' # ...vocab.json file의 path
+tokenizer_for_load = BertTokenizerFast.from_pretrained('ChatBots/tokenizer/made_tokenizers_wordpiece',
+                                                       strip_accents=False,  # Must be False if cased model
+                                                       lowercase=False)  # 로드
 
-tokenizer = BartTokenizer(vocab_file = vocab_path, merges_file = merges_file, do_lower_case = False) # BartTokenizerFast는 동작하지 않음
+print('vocab size : %d' % tokenizer_for_load.vocab_size)
+# tokenized_input_for_pytorch = tokenizer_for_load("i am very hungry", return_tensors="pt")
+tokenized_input_for_pytorch = tokenizer_for_load("나는 오늘 아침밥을 먹었다.", return_tensors="pt")
+# tokenized_input_for_tensorflow = tokenizer_for_load("나는 오늘 아침밥을 먹었다.", return_tensors="tf")
 
-test_str = ' [CLS] 안녕하세요, 저는 JminJ 입니다. [SEP]'
-print('테스트 문장 :', test_str)
-
-encoded_str = tokenizer.encode(test_str, add_special_tokens=False)
-print('문장 인코딩 :', encoded_str)
-
-decoded_str = tokenizer.decode(encoded_str)
-print('문장 디코딩 :',decoded_str)
+print("Tokens (str)      : {}".format([tokenizer_for_load.convert_ids_to_tokens(s) for s in tokenized_input_for_pytorch['input_ids'].tolist()[0]]))
+print("Tokens (int)      : {}".format(tokenized_input_for_pytorch['input_ids'].tolist()[0]))
+print("Tokens (attn_mask): {}\n".format(tokenized_input_for_pytorch['attention_mask'].tolist()[0]))
