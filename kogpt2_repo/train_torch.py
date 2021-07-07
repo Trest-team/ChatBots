@@ -26,7 +26,7 @@ parser.add_argument('--sentiment',
 
 parser.add_argument('--model_params',
                     type=str,
-                    default='model_chp/model_-last.ckpt',
+                    default='./kogpt2_repo/model_-epoch=03-train_loss=23.42.ckpt',
                     help='model binary for starting chat')
 
 parser.add_argument('--train',
@@ -115,7 +115,7 @@ class KoGPT2Chat(LightningModule):
         super(KoGPT2Chat, self).__init__()
         self.hparams = hparams
         self.neg = -1e18
-        self.kogpt2 = GPT2LMHeadModel.from_pretrained('skt/kogpt2-base-v2')
+        self.kogpt2 = GPT2LMHeadModel.from_pretrained('skt/kogpt2-base-v2', return_dict = True)
         self.loss_function = torch.nn.CrossEntropyLoss(reduction='none')
 
     @staticmethod
@@ -207,7 +207,7 @@ class KoGPT2Chat(LightningModule):
                         torch.argmax(
                             pred,
                             dim=-1).squeeze().numpy().tolist())[-1]
-                    if gen == EOS:
+                    if gen == EOS:          
                         break
                     a += gen.replace('▁', ' ')
                 print("Simsimi > {}".format(a.strip()))
@@ -239,4 +239,5 @@ if __name__ == "__main__":
         logging.info('best model path {}'.format(checkpoint_callback.best_model_path))
     if args.chat:
         model = KoGPT2Chat.load_from_checkpoint(args.model_params)
+        model.save_pretrained('./kogpt2_repo/')
         model.chat()
