@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import argparse
 import logging
-
 import numpy as np
 import pandas as pd
 import torch
@@ -33,6 +32,11 @@ parser.add_argument('--train',
                     action='store_true',
                     default=False,
                     help='for training')
+
+parser.add_argument('--user_talk',
+                    type = str,
+                    default = 'quit',
+                    help = "user's talk")
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -111,7 +115,7 @@ class CharDataset(Dataset):
 
 
 class KoGPT2Chat(LightningModule):
-    def __init__(self, hparams, **kwargs):
+    def __init__(self, hparams):
         super(KoGPT2Chat, self).__init__()
         self.hparams = hparams
         self.neg = -1e18
@@ -191,26 +195,27 @@ class KoGPT2Chat(LightningModule):
             shuffle=True, collate_fn=self._collate_fn)
         return train_dataloader
 
-    def chat(self, sent='0'):
+    def chat(self, q = 'quit', sent = '0'):
         tok = TOKENIZER
         sent_tokens = tok.tokenize(sent)
+        # q =  self.hparams.user_talk
         with torch.no_grad():
+            a = ''
+
             while 1:
-                q = input('user > ').strip()
-                if q == 'quit':
+                input_ids = torch.LongTensor(tok.encode(U_TKN + q + SENT + sent + S_TKN + a)).unsqueeze(dim = 0)
+                pred = self(input_ids)
+                gen = tok.convert_ids_to_tokens(
+                    torch.argmax(
+                        pred,
+                        dim = -1
+                    ).squeeze().numpy().tolist()
+                )[-1]
+                if gen == EOS:
                     break
-                a = ''
-                while 1:
-                    input_ids = torch.LongTensor(tok.encode(U_TKN + q + SENT + sent + S_TKN + a)).unsqueeze(dim=0)
-                    pred = self(input_ids)
-                    gen = tok.convert_ids_to_tokens(
-                        torch.argmax(
-                            pred,
-                            dim=-1).squeeze().numpy().tolist())[-1]
-                    if gen == EOS:          
-                        break
-                    a += gen.replace('▁', ' ')
-                print("Simsimi > {}".format(a.strip()))
+                a += gen.replace('▁', ' ')
+        print(a.strip())
+        return a.strip()
 
 
 parser = KoGPT2Chat.add_model_specific_args(parser)
@@ -237,7 +242,7 @@ if __name__ == "__main__":
             checkpoint_callback=checkpoint_callback, gradient_clip_val=1.0)
         trainer.fit(model)
         logging.info('best model path {}'.format(checkpoint_callback.best_model_path))
+    print(args.user_talk)
     if args.chat:
         model = KoGPT2Chat.load_from_checkpoint(args.model_params)
-        model.save_pretrained('./kogpt2_repo/')
-        model.chat()
+        model.chat(q = args.user_talk)
